@@ -39,4 +39,4 @@ jobs:
         run: terraform -chdir=${{ inputs.working-directory }} init -input=false -reconfigure
 
       - name: Terraform Destroy
-        run: terraform -chdir=${{ inputs.working-directory }} destroy -auto-approve
+        run: terraform -chdir=${{ inputs.working-directory }} destroy -input=false -auto-approve -var-file=terraform.tfvars
