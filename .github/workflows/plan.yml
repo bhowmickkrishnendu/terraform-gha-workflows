@@ -39,4 +39,4 @@ jobs:
         run: terraform init -input=false
 
       - name: Terraform Plan
-        run: terraform plan -input=false -out=tfplan
+        run: terraform -chdir=${{ inputs.working-directory }} plan -input=false -out=tfplan
