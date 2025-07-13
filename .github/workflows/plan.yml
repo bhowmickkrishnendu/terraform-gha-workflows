@@ -13,23 +13,30 @@ on:
         required: true
 
 jobs:
-  terraform-plan:
+  plan:
     runs-on: ubuntu-latest
     env:
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: actions/cache@v4
+        with:
+          path: ${{ inputs.working-directory }}/.terraform
+          key: ${{ runner.os }}-terraform-${{ hashFiles(format('{0}/**/*.tf', inputs.working-directory)) }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
+
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.0
-        
-      - name: Terraform Plan
-        run: |
-          terraform -chdir=${{ inputs.working-directory }} plan -input=false -out=tfplan
 
-      - name: Show Plan Output
-        run: terraform -chdir=${{ inputs.working-directory }} show -no-color tfplan
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Plan
+        run: terraform plan -input=false -out=tfplan

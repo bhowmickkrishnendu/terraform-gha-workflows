@@ -16,9 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/cache@v4
+        with:
+          path: ${{ inputs.working-directory }}/.terraform
+          key: ${{ runner.os }}-terraform-${{ hashFiles(format('{0}/**/*.tf', inputs.working-directory)) }}
+          restore-keys: |
+            ${{ runner.os }}-terraform-
+
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.0
+
+      - name: Terraform Init (again for validate job context)
+        run: terraform init -input=false
 
       - name: Terraform Validate
         run: terraform validate
