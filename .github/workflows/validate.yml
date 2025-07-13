@@ -15,6 +15,10 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.8.5
+
       - name: Terraform Validate
         run: terraform validate
