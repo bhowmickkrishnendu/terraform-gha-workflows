@@ -35,5 +35,8 @@ jobs:
         with:
           terraform_version: 1.9.0
 
+      - name: Terraform Init
+        run: terraform -chdir=${{ inputs.working-directory }} init -input=false -reconfigure
+
       - name: Terraform Apply
         run: terraform -chdir=${{ inputs.working-directory }} apply -auto-approve tfplan
