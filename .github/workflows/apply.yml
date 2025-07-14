@@ -39,7 +39,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tfplan
-          path: .
+          path: ${{ inputs.working-directory }}
 
       - name: Terraform Init
         run: terraform init -input=false -reconfigure
