@@ -37,9 +37,15 @@ jobs:
 
       - name: Terraform Plan
         run: terraform plan -input=false -var-file=terraform.tfvars -out=tfplan
+
+      - name: Debug to check tfplan location
+        run: ls -lh tfplan
+
+      - name: Terraform Show Plan
+        run: terraform show -json tfplan > plan.json
       
       - name: Upload tfplan artifact
         uses: actions/upload-artifact@v4
         with:
           name: tfplan
-          path: tfplan
+          path: ${{ inputs.working-directory }}/tfplan
