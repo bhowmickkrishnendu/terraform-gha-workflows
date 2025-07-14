@@ -26,8 +26,8 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: ${{ inputs.working-directory }}/.terraform
-          key: ${{ runner.os }}-terraform-${{ hashFiles(format('{0}/**/*.tf', inputs.working-directory)) }}
+          path: .terraform
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/*.tf') }}
           restore-keys: |
             ${{ runner.os }}-terraform-
 
@@ -36,7 +36,7 @@ jobs:
           terraform_version: 1.9.0
 
       - name: Terraform Init
-        run: terraform -chdir=${{ inputs.working-directory }} init -input=false -reconfigure
+        run: terraform init -input=false -reconfigure
 
       - name: Terraform Destroy
-        run: terraform -chdir=${{ inputs.working-directory }} destroy -input=false -auto-approve -var-file=${{ inputs.working-directory }}/terraform.tfvars
+        run: terraform destroy -input=false -auto-approve -var-file=terraform.tfvars

@@ -26,17 +26,23 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: ${{ inputs.working-directory }}/.terraform
-          key: ${{ runner.os }}-terraform-${{ hashFiles(format('{0}/**/*.tf', inputs.working-directory)) }}
+          path: .terraform
+          key: ${{ runner.os }}-terraform-${{ hashFiles('**/*.tf') }}
           restore-keys: |
             ${{ runner.os }}-terraform-
 
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.0
+      
+      - name: Download tfplan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan
+          path: .
 
       - name: Terraform Init
-        run: terraform -chdir=${{ inputs.working-directory }} init -input=false -reconfigure
+        run: terraform init -input=false -reconfigure
 
       - name: Terraform Apply
-        run: terraform -chdir=${{ inputs.working-directory }} apply -input=false -auto-approve -var-file=${{ inputs.working-directory }}/terraform.tfvars
+        run: terraform apply -input=false tfplan
