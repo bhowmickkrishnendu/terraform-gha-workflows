@@ -1,0 +1,100 @@
+name: Terraform Plan Reusable Workflow
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        required: true
+        type: string
+
+      component:
+        required: true
+        type: string
+
+      aws_region:
+        required: true
+        type: string
+
+      role_to_assume:
+        required: true
+        type: string
+
+      terraform_version:
+        required: false
+        type: string
+        default: "1.12.2"
+
+      tfvars_file:
+        required: true
+        type: string
+
+    secrets:
+      INFRACOST_API_KEY:
+        required: true
+
+jobs:
+  terraform:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    defaults:
+      run:
+        working-directory: environments/${{ inputs.environment }}/${{ inputs.component }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Verify AWS Identity
+        run: aws sts get-caller-identity
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Init
+        run: terraform init -input=false
+
+      - name: Terraform Validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -no-color \
+            -input=false \
+            -out=tfplan \
+            -var-file="${{ inputs.tfvars_file }}"
+
+      - name: Upload Terraform Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.environment }}-${{ inputs.component }}
+          path: environments/${{ inputs.environment }}/${{ inputs.component }}/tfplan
+
+      - name: Setup Infracost
+        uses: infracost/actions/setup@v3
+
+      - name: Generate Infracost Breakdown
+        run: |
+          infracost breakdown \
+            --path . \
+            --terraform-var-file="${{ inputs.tfvars_file }}" \
+            --format table
+        env:
+          INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
