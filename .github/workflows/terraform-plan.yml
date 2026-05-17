@@ -78,17 +78,11 @@ jobs:
         run: tflint --format compact --color
         continue-on-error: true
 
-      - name: Install Checkov
-        run: pip install checkov
-
-      - name: Run Checkov Security Scan
-        run: |
-          checkov -d . \
-            --framework terraform \
-            --output cli \
-            --compact \
-            --soft-fail-on LOW,MEDIUM,HIGH
-        continue-on-error: false
+      - name: Run tfsec Security Scan
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: environments/${{ inputs.environment }}/${{ inputs.component }}
+          soft_fail: false  # Fail pipeline on security issues
 
       # === END SECURITY GATES ===
 
