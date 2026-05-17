@@ -69,4 +69,6 @@ jobs:
           path: environments/${{ inputs.environment }}/${{ inputs.component }}
 
       - name: Terraform Apply
+        env:
+          TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
         run: terraform apply -input=false tfplan
