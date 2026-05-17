@@ -44,15 +44,16 @@ jobs:
         working-directory: environments/${{ inputs.environment }}/${{ inputs.component }}
 
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
       - name: Validate Confirmation
+        working-directory: .
         run: |
           if [ "${{ inputs.confirm_destroy }}" != "DESTROY" ]; then
             echo "Confirmation failed"
             exit 1
           fi
-
-      - name: Checkout Repository
-        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
