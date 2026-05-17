@@ -6,28 +6,22 @@ on:
       environment:
         required: true
         type: string
-
       component:
         required: true
         type: string
-
       aws_region:
         required: true
         type: string
-
       role_to_assume:
         required: true
         type: string
-
       terraform_version:
         required: false
         type: string
         default: "1.14"
-
       tfvars_file:
         required: true
         type: string
-
     secrets:
       INFRACOST_API_KEY:
         required: true
@@ -36,11 +30,9 @@ jobs:
   terraform:
     name: Terraform Plan
     runs-on: ubuntu-latest
-
     permissions:
       id-token: write
       contents: read
-
     defaults:
       run:
         working-directory: environments/${{ inputs.environment }}/${{ inputs.component }}
@@ -71,6 +63,34 @@ jobs:
 
       - name: Terraform Validate
         run: terraform validate -no-color
+
+      # === SECURITY & QUALITY GATES ===
+      
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: Initialize TFLint
+        run: tflint --init
+
+      - name: Run TFLint
+        run: tflint --format compact --color
+        continue-on-error: false
+
+      - name: Install Checkov
+        run: pip install checkov
+
+      - name: Run Checkov Security Scan
+        run: |
+          checkov -d . \
+            --framework terraform \
+            --output cli \
+            --compact \
+            --soft-fail-on LOW
+        continue-on-error: false
+
+      # === END SECURITY GATES ===
 
       - name: Terraform Plan
         run: |
