@@ -40,7 +40,6 @@ jobs:
     permissions:
       id-token: write
       contents: read
-      pull-requests: write
 
     defaults:
       run:
@@ -79,8 +78,9 @@ jobs:
             -no-color \
             -input=false \
             -out=tfplan \
-            -var-file="${{ inputs.tfvars_file }}" \
-            -var="public_key=${{ secrets.SYS_PUBKEY }}"
+            -var-file="${{ inputs.tfvars_file }}"
+        env:
+          TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
 
       - name: Upload Terraform Plan Artifact
         uses: actions/upload-artifact@v4
