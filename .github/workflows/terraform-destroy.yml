@@ -76,3 +76,5 @@ jobs:
             -auto-approve \
             -input=false \
             -var-file="${{ inputs.tfvars_file }}"
+        env:
+          TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
