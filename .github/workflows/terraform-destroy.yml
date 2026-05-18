@@ -26,6 +26,9 @@ on:
       confirm_destroy:
         required: true
         type: string
+    secrets:
+      SYS_PUBKEY:
+        required: true
 
 jobs:
   terraform-destroy:

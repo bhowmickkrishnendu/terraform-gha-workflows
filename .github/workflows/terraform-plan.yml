@@ -25,6 +25,8 @@ on:
     secrets:
       INFRACOST_API_KEY:
         required: true
+      SYS_PUBKEY:
+        required: true
 
 jobs:
   terraform:
