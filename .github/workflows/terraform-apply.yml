@@ -27,9 +27,9 @@ on:
       tfvars_file:
         required: false
         type: string
-    secrets:
-      SYS_PUBKEY:
-        required: true
+    # secrets:
+    #   SYS_PUBKEY:
+    #     required: true
 
 jobs:
   terraform-apply:
@@ -72,6 +72,6 @@ jobs:
           path: environments/${{ inputs.environment }}/${{ inputs.component }}
 
       - name: Terraform Apply
-        env:
-          TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
+        # env:
+        #   TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
         run: terraform apply -input=false tfplan
