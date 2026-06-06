@@ -25,8 +25,8 @@ on:
     secrets:
       INFRACOST_API_KEY:
         required: true
-      SYS_PUBKEY:
-        required: true
+      # SYS_PUBKEY:
+      #   required: true
 
 jobs:
   terraform:
@@ -95,8 +95,8 @@ jobs:
             -input=false \
             -out=tfplan \
             -var-file="${{ inputs.tfvars_file }}"
-        env:
-          TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
+        # env:
+        #   TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
 
       - name: Upload Terraform Plan Artifact
         uses: actions/upload-artifact@v4
