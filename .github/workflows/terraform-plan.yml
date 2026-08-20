@@ -32,13 +32,6 @@ jobs:
   terraform:
     name: Terraform Plan
     runs-on: ubuntu-latest
-
-    # Prevent a plan from running while an apply is in progress on the same
-    # component. Uses a shared concurrency key with the apply job so they queue.
-    concurrency:
-      group: terraform-apply-${{ inputs.environment }}-${{ inputs.component }}
-      cancel-in-progress: false
-
     permissions:
       id-token: write
       contents: read

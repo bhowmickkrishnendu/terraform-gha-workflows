@@ -36,12 +36,6 @@ jobs:
     name: Terraform Apply
     runs-on: ubuntu-latest
 
-    # Prevent parallel applies on the same component. A new run will queue
-    # and wait rather than collide with — or forcibly unlock — an in-progress apply.
-    concurrency:
-      group: terraform-apply-${{ inputs.environment }}-${{ inputs.component }}
-      cancel-in-progress: false
-
     environment:
       name: production
 
