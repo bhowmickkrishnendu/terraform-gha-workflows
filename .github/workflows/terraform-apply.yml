@@ -36,6 +36,12 @@ jobs:
     name: Terraform Apply
     runs-on: ubuntu-latest
 
+    # Prevent parallel applies on the same component. A new run will queue
+    # and wait rather than collide with — or forcibly unlock — an in-progress apply.
+    concurrency:
+      group: terraform-apply-${{ inputs.environment }}-${{ inputs.component }}
+      cancel-in-progress: false
+
     environment:
       name: production
 
@@ -64,28 +70,6 @@ jobs:
 
       - name: Terraform Init
         run: terraform init -input=false
-
-      # ── State lock guard ──────────────────────────────────────────────────────
-      # If a previous run died mid-apply it can leave a stale DynamoDB lock.
-      # This step detects the lock ID from the error output and force-unlocks it
-      # so the current run can proceed cleanly.
-      - name: Force Unlock State (if locked)
-        id: force-unlock
-        run: |
-          LOCK_OUTPUT=$(terraform plan -input=false -lock-timeout=10s 2>&1 || true)
-          if echo "$LOCK_OUTPUT" | grep -q "Error acquiring the state lock"; then
-            LOCK_ID=$(echo "$LOCK_OUTPUT" | grep -oP '(?<=ID:\s{8})[0-9a-f-]{36}' | head -1)
-            if [ -n "$LOCK_ID" ]; then
-              echo "::warning::Stale state lock detected (ID: $LOCK_ID). Force-unlocking..."
-              terraform force-unlock -force "$LOCK_ID"
-              echo "unlocked=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "::error::State is locked but could not extract Lock ID. Check the state manually."
-              exit 1
-            fi
-          else
-            echo "unlocked=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Download Terraform Plan Artifact
         uses: actions/download-artifact@v4
