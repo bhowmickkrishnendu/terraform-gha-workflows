@@ -88,6 +88,23 @@ jobs:
 
       # === END SECURITY GATES ===
 
+      # ── State lock guard ──────────────────────────────────────────────────────
+      # Detects a stale DynamoDB lock from a previous crashed run and
+      # force-unlocks it before attempting terraform plan.
+      - name: Force Unlock State (if locked)
+        run: |
+          LOCK_OUTPUT=$(terraform plan -input=false -lock-timeout=10s 2>&1 || true)
+          if echo "$LOCK_OUTPUT" | grep -q "Error acquiring the state lock"; then
+            LOCK_ID=$(echo "$LOCK_OUTPUT" | grep -oP '(?<=ID:\s{8})[0-9a-f-]{36}' | head -1)
+            if [ -n "$LOCK_ID" ]; then
+              echo "::warning::Stale state lock detected (ID: $LOCK_ID). Force-unlocking..."
+              terraform force-unlock -force "$LOCK_ID"
+            else
+              echo "::error::State is locked but could not extract Lock ID. Check manually."
+              exit 1
+            fi
+          fi
+
       - name: Terraform Plan
         run: |
           terraform plan \
