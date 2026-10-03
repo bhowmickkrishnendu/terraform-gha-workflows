@@ -78,28 +78,28 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          terraform plan -destroy -json -detailed-exitcode -input=false \
+          terraform plan -destroy -no-color -detailed-exitcode -input=false \
             -out=destroy.tfplan -var-file="${{ inputs.tfvars_file }}" \
-            > "$RUNNER_TEMP/terraform-destroy-plan.jsonl" 2>&1
-          plan_exit=$?
+            2>&1 | tee "$RUNNER_TEMP/terraform-destroy-plan.txt"
+          plan_exit=${PIPESTATUS[0]}
           set -e
-          jq -r 'select(.type == "diagnostic" and .diagnostic.severity == "error") | .diagnostic.summary' \
-            "$RUNNER_TEMP/terraform-destroy-plan.jsonl" >&2
           if [ "$plan_exit" -ne 0 ] && [ "$plan_exit" -ne 2 ]; then
-            echo "::error::Terraform destroy plan failed; inspect the diagnostic summary above."
+            echo "::error::Terraform destroy plan failed; inspect the output above."
             exit 1
           fi
           if [ "$plan_exit" -eq 2 ]; then
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No changes. Destroy apply will be skipped for this stack."
           fi
           echo "plan_sha256=$(sha256sum destroy.tfplan | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
           {
             echo "### ${{ inputs.component }} destroy plan"
-            echo "| Address | Actions |"
-            echo "| --- | --- |"
-            terraform show -json destroy.tfplan | jq -r '.resource_changes[]? | select(.change.actions != ["no-op"]) | "| " + .address + " | " + (.change.actions | join(", ")) + " |"'
+            echo "Plan exit code: $plan_exit (0 = no changes, 2 = changes)"
+            echo '```text'
+            terraform show -no-color destroy.tfplan
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload sensitive destroy plan
@@ -183,4 +183,4 @@ jobs:
 
       - name: Apply approved destroy plan
         working-directory: ${{ env.TF_ROOT }}
-        run: terraform apply -input=false destroy.tfplan
+        run: terraform apply -no-color -input=false destroy.tfplan
