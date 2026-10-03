@@ -10,6 +10,10 @@ on:
       component:
         required: true
         type: string
+      root_directory:
+        required: false
+        type: string
+        default: ""
 
       aws_region:
         required: true
@@ -43,9 +47,8 @@ jobs:
       id-token: write
       contents: read
 
-    defaults:
-      run:
-        working-directory: environments/${{ inputs.environment }}/${{ inputs.component }}
+    env:
+      TF_ROOT: ${{ inputs.root_directory != '' && inputs.root_directory || format('environments/{0}/{1}', inputs.environment, inputs.component) }}
 
     steps:
       - name: Checkout Repository
@@ -63,15 +66,17 @@ jobs:
           aws-region: ${{ inputs.aws_region }}
 
       - name: Terraform Init
+        working-directory: ${{ env.TF_ROOT }}
         run: terraform init -input=false
 
       - name: Download Terraform Plan Artifact
         uses: actions/download-artifact@v4
         with:
           name: tfplan-${{ inputs.environment }}-${{ inputs.component }}
-          path: environments/${{ inputs.environment }}/${{ inputs.component }}
+          path: ${{ env.TF_ROOT }}
 
       - name: Terraform Apply
+        working-directory: ${{ env.TF_ROOT }}
         # env:
         #   TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
         run: terraform apply -input=false tfplan
