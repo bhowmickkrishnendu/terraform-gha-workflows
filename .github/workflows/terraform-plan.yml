@@ -9,6 +9,10 @@ on:
       component:
         required: true
         type: string
+      root_directory:
+        required: false
+        type: string
+        default: ""
       aws_region:
         required: true
         type: string
@@ -35,9 +39,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    defaults:
-      run:
-        working-directory: environments/${{ inputs.environment }}/${{ inputs.component }}
+    env:
+      TF_ROOT: ${{ inputs.root_directory != '' && inputs.root_directory || format('environments/{0}/{1}', inputs.environment, inputs.component) }}
 
     steps:
       - name: Checkout Repository
@@ -58,12 +61,15 @@ jobs:
         run: aws sts get-caller-identity
 
       - name: Terraform Format Check
+        working-directory: ${{ env.TF_ROOT }}
         run: terraform fmt -check -recursive
 
       - name: Terraform Init
+        working-directory: ${{ env.TF_ROOT }}
         run: terraform init -input=false
 
       - name: Terraform Validate
+        working-directory: ${{ env.TF_ROOT }}
         run: terraform validate -no-color
 
       # === SECURITY & QUALITY GATES ===
@@ -74,21 +80,24 @@ jobs:
           tflint_version: latest
 
       - name: Initialize TFLint
+        working-directory: ${{ env.TF_ROOT }}
         run: tflint --init
 
       - name: Run TFLint
+        working-directory: ${{ env.TF_ROOT }}
         run: tflint --format compact --color
         continue-on-error: true
 
       - name: Run tfsec Security Scan
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
-          working_directory: environments/${{ inputs.environment }}/${{ inputs.component }}
+          working_directory: ${{ env.TF_ROOT }}
           soft_fail: false  # Fail pipeline on security issues
 
       # === END SECURITY GATES ===
 
       - name: Terraform Plan
+        working-directory: ${{ env.TF_ROOT }}
         run: |
           terraform plan \
             -no-color \
@@ -102,12 +111,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-${{ inputs.environment }}-${{ inputs.component }}
-          path: environments/${{ inputs.environment }}/${{ inputs.component }}/tfplan
+          path: ${{ env.TF_ROOT }}/tfplan
 
       - name: Setup Infracost
         uses: infracost/actions/setup@v3
 
       - name: Generate Infracost Breakdown
+        working-directory: ${{ env.TF_ROOT }}
         run: |
           infracost breakdown \
             --path . \

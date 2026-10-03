@@ -1,56 +1,27 @@
-# 🚀 Terraform GHA Workflows
+# Reusable Terraform GitHub Actions workflows
 
-This repository provides **modular, reusable GitHub Actions workflows** designed for automating **Terraform CI/CD pipelines** in a clean, DRY, and enterprise-ready manner.
+This repository provides reusable plan, apply, and destroy workflows under `.github/workflows/`. A caller supplies its AWS region, GitHub OIDC role ARN, environment name, and component name. The plan and apply workflows share a plan artifact named with the environment and component.
 
-## 📦 Included Shared Workflows
+## Terraform root path
 
-These workflows are stored in `.github/workflows/shared/` and intended to be **reused via `workflow_call`** from other Terraform repositories:
+The optional `root_directory` input points to the Terraform root in the caller repository. For a repository with `stacks/networking`, pass `root_directory: stacks/networking`. Plan, apply, and destroy must receive the same path for that component. The value is relative to the caller repository root.
 
-| Workflow       | Description                          |
-|----------------|--------------------------------------|
-| `init.yml`     | Runs `terraform init`                |
-| `validate.yml` | Runs `terraform validate`            |
-| `plan.yml`     | Runs `terraform plan` and stores output for review |
-| `apply.yml`    | Runs `terraform apply` using saved plan |
-| `destroy.yml`  | Runs `terraform destroy`             |
-
-## 📘 Example Usage
-
-To use from another repo (e.g. `AWS-With-Terraform`):
+If `root_directory` is omitted, the workflows continue to use `environments/<environment>/<component>`. This keeps existing callers working while they update their folder layouts.
 
 ```yaml
 jobs:
   plan:
-    uses: bhowmickkrishnendu/terraform-gha-workflows/.github/workflows/shared/plan.yml@v1.0.0
+    uses: OWNER/terraform-gha-workflows/.github/workflows/terraform-plan.yml@PINNED_COMMIT
     with:
-      working-directory: path/to/terraform/module
+      environment: dev
+      component: networking
+      root_directory: stacks/networking
+      aws_region: YOUR_REGION
+      terraform_version: 1.14.2
+      tfvars_file: dev.tfvars
+      role_to_assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
+    secrets:
+      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
 ```
 
-Make sure to create a **tag (e.g. `v1.0.0`)** and reference it using `@v1.0.0`.
-
-## ✅ Requirements
-
-- Terraform v1.6 or higher
-- GitHub Actions enabled
-- AWS credentials provided via secrets
-
-## 🔐 Required Secrets
-
-Add these secrets to your repo that is using the shared workflows:
-
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-
-## 🏗 Recommended Directory Layout in Repos Using This
-
-```
-.
-└── .github/
-    └── workflows/
-        └── uat.yml     # Calls shared workflows from this repo
-```
-
-## 📌 Maintainer
-
-**Author:** [Krishnendu Bhowmick](https://github.com/bhowmickkrishnendu)  
-Feel free to fork or raise issues for improvement.
+Pin a reviewed commit in callers. The workflows use GitHub OIDC to assume the supplied AWS role. They do not need AWS access keys in repository secrets. Check the caller's plan, approval, and artifact settings before enabling apply or destroy.
