@@ -90,30 +90,44 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          terraform plan -json -detailed-exitcode -input=false \
+          terraform plan -no-color -detailed-exitcode -input=false \
             -out=tfplan -var-file="${{ inputs.tfvars_file }}" \
-            > "$RUNNER_TEMP/terraform-plan.jsonl" 2>&1
-          plan_exit=$?
+            2>&1 | tee "$RUNNER_TEMP/terraform-plan.txt"
+          plan_exit=${PIPESTATUS[0]}
           set -e
-          jq -r 'select(.type == "diagnostic" and .diagnostic.severity == "error") | .diagnostic.summary' \
-            "$RUNNER_TEMP/terraform-plan.jsonl" >&2
           if [ "$plan_exit" -ne 0 ] && [ "$plan_exit" -ne 2 ]; then
-            echo "::error::Terraform plan failed; inspect the diagnostic summary above."
+            echo "::error::Terraform plan failed; inspect the output above."
             exit 1
           fi
           if [ "$plan_exit" -eq 2 ]; then
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "No changes. Apply will be skipped for this stack."
           fi
           echo "plan_sha256=$(sha256sum tfplan | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
           {
             echo "### ${{ inputs.component }} plan"
             echo "Commit: ${GITHUB_SHA}"
             echo ""
-            echo "| Address | Actions |"
-            echo "| --- | --- |"
-            terraform show -json tfplan | jq -r '.resource_changes[]? | select(.change.actions != ["no-op"]) | "| " + .address + " | " + (.change.actions | join(", ")) + " |"'
+            echo "Plan exit code: $plan_exit (0 = no changes, 2 = changes)"
+            echo '```text'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show current state outputs
+        working-directory: ${{ env.TF_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform output -no-color | tee "$RUNNER_TEMP/terraform-outputs.txt"
+          {
+            echo "### ${{ inputs.component }} current state outputs"
+            echo "These values are from state before apply. Proposed output changes appear in the plan above."
+            echo '```text'
+            cat "$RUNNER_TEMP/terraform-outputs.txt"
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload sensitive plan for apply

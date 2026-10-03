@@ -104,4 +104,17 @@ jobs:
 
       - name: Apply reviewed plan
         working-directory: ${{ env.TF_ROOT }}
-        run: terraform apply -input=false tfplan
+        run: terraform apply -no-color -input=false tfplan
+
+      - name: Show applied state outputs
+        working-directory: ${{ env.TF_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          terraform output -no-color | tee "$RUNNER_TEMP/terraform-outputs.txt"
+          {
+            echo "### ${{ inputs.component }} applied state outputs"
+            echo '```text'
+            cat "$RUNNER_TEMP/terraform-outputs.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
