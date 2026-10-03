@@ -6,7 +6,6 @@ on:
       environment:
         required: true
         type: string
-
       component:
         required: true
         type: string
@@ -14,69 +13,95 @@ on:
         required: false
         type: string
         default: ""
-
       aws_region:
         required: true
         type: string
-
       role_to_assume:
         required: true
         type: string
-
       terraform_version:
         required: false
         type: string
-        default: "1.14"
-
-      tfvars_file:
-        required: false
+        default: "1.14.2"
+      approval_environment:
+        required: true
         type: string
-    # secrets:
-    #   SYS_PUBKEY:
-    #     required: true
+      expected_plan_sha256:
+        required: true
+        type: string
 
 jobs:
   terraform-apply:
     name: Terraform Apply
     runs-on: ubuntu-latest
-
     environment:
-      name: production
-
+      name: ${{ inputs.approval_environment }}
     permissions:
       id-token: write
       contents: read
-
+      actions: read
     env:
       TF_ROOT: ${{ inputs.root_directory != '' && inputs.root_directory || format('environments/{0}/{1}', inputs.environment, inputs.component) }}
+      TF_IN_AUTOMATION: "true"
 
     steps:
-      - name: Checkout Repository
+      - name: Require configured reviewers for this stack
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPROVAL_ENVIRONMENT: ${{ inputs.approval_environment }}
+        run: |
+          curl -fsS \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/environments/$APPROVAL_ENVIRONMENT" \
+            | jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and (.reviewers | length > 0))'
+
+      - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Confirm this is the latest merged commit
+        shell: bash
+        run: |
+          current_sha=$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)
+          test -n "$current_sha"
+          test "$current_sha" = "$GITHUB_SHA"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
 
-      - name: Terraform Init
-        working-directory: ${{ env.TF_ROOT }}
-        run: terraform init -input=false
+      - name: Verify AWS session
+        run: aws sts get-caller-identity > /dev/null
 
-      - name: Download Terraform Plan Artifact
+      - name: Initialize Terraform
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Download saved plan from this run
         uses: actions/download-artifact@v4
         with:
           name: tfplan-${{ inputs.environment }}-${{ inputs.component }}
           path: ${{ env.TF_ROOT }}
 
-      - name: Terraform Apply
+      - name: Verify saved plan digest
         working-directory: ${{ env.TF_ROOT }}
-        # env:
-        #   TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
-        run: terraform apply -input=false tfplan
+        shell: bash
+        env:
+          EXPECTED_PLAN_SHA256: ${{ inputs.expected_plan_sha256 }}
+        run: |
+          [[ "$EXPECTED_PLAN_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          actual_sha=$(sha256sum tfplan | cut -d ' ' -f1)
+          test "$actual_sha" = "$EXPECTED_PLAN_SHA256"
+
+      - name: Apply reviewed plan
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform apply -input=false tfplan

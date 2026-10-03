@@ -6,7 +6,6 @@ on:
       environment:
         required: true
         type: string
-
       component:
         required: true
         type: string
@@ -14,72 +13,174 @@ on:
         required: false
         type: string
         default: ""
-
       aws_region:
         required: true
         type: string
-
       role_to_assume:
         required: true
         type: string
-
+      terraform_version:
+        required: false
+        type: string
+        default: "1.14.2"
       tfvars_file:
         required: true
         type: string
-
       confirm_destroy:
         required: true
         type: string
-    # secrets:
-    #   SYS_PUBKEY:
-    #     required: true
+      approval_environment:
+        required: true
+        type: string
 
 jobs:
-  terraform-destroy:
-    name: Terraform Destroy
+  destroy-plan:
+    name: Plan Destroy
     runs-on: ubuntu-latest
-
-    environment:
-      name: production
-
     permissions:
       id-token: write
       contents: read
-
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+      plan_sha256: ${{ steps.plan.outputs.plan_sha256 }}
     env:
       TF_ROOT: ${{ inputs.root_directory != '' && inputs.root_directory || format('environments/{0}/{1}', inputs.environment, inputs.component) }}
-
+      TF_IN_AUTOMATION: "true"
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Validate Confirmation
-        working-directory: .
-        run: |
-          if [ "${{ inputs.confirm_destroy }}" != "DESTROY" ]; then
-            echo "Confirmation failed"
-            exit 1
-          fi
+      - name: Validate typed confirmation
+        env:
+          CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
+        run: test "$CONFIRM_DESTROY" = "DESTROY"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
 
-      - name: Terraform Init
+      - name: Initialize Terraform
         working-directory: ${{ env.TF_ROOT }}
-        run: terraform init -input=false
+        run: terraform init -input=false -lockfile=readonly
 
-      - name: Terraform Destroy
+      - name: Save destroy plan
+        id: plan
         working-directory: ${{ env.TF_ROOT }}
+        shell: bash
         run: |
-          terraform destroy \
-            -auto-approve \
-            -input=false \
-            -var-file="${{ inputs.tfvars_file }}"
-        # env:
-        #   TF_VAR_public_key: ${{ secrets.SYS_PUBKEY }}
+          set -uo pipefail
+          set +e
+          terraform plan -destroy -json -detailed-exitcode -input=false \
+            -out=destroy.tfplan -var-file="${{ inputs.tfvars_file }}" \
+            > "$RUNNER_TEMP/terraform-destroy-plan.jsonl" 2>&1
+          plan_exit=$?
+          set -e
+          jq -r 'select(.type == "diagnostic" and .diagnostic.severity == "error") | .diagnostic.summary' \
+            "$RUNNER_TEMP/terraform-destroy-plan.jsonl" >&2
+          if [ "$plan_exit" -ne 0 ] && [ "$plan_exit" -ne 2 ]; then
+            echo "::error::Terraform destroy plan failed; inspect the diagnostic summary above."
+            exit 1
+          fi
+          if [ "$plan_exit" -eq 2 ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "plan_sha256=$(sha256sum destroy.tfplan | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
+          {
+            echo "### ${{ inputs.component }} destroy plan"
+            echo "| Address | Actions |"
+            echo "| --- | --- |"
+            terraform show -json destroy.tfplan | jq -r '.resource_changes[]? | select(.change.actions != ["no-op"]) | "| " + .address + " | " + (.change.actions | join(", ")) + " |"'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload sensitive destroy plan
+        if: steps.plan.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: destroy-plan-${{ inputs.environment }}-${{ inputs.component }}
+          path: ${{ env.TF_ROOT }}/destroy.tfplan
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  terraform-destroy:
+    name: Terraform Destroy
+    needs: destroy-plan
+    if: needs.destroy-plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.approval_environment }}
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    env:
+      TF_ROOT: ${{ inputs.root_directory != '' && inputs.root_directory || format('environments/{0}/{1}', inputs.environment, inputs.component) }}
+      TF_IN_AUTOMATION: "true"
+    steps:
+      - name: Require configured reviewers for this stack
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPROVAL_ENVIRONMENT: ${{ inputs.approval_environment }}
+        run: |
+          curl -fsS \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/environments/$APPROVAL_ENVIRONMENT" \
+            | jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and (.reviewers | length > 0))'
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Confirm this is the latest branch commit
+        shell: bash
+        run: |
+          current_sha=$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)
+          test -n "$current_sha"
+          test "$current_sha" = "$GITHUB_SHA"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ inputs.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Initialize Terraform
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform init -input=false -lockfile=readonly
+
+      - name: Download destroy plan from this run
+        uses: actions/download-artifact@v4
+        with:
+          name: destroy-plan-${{ inputs.environment }}-${{ inputs.component }}
+          path: ${{ env.TF_ROOT }}
+
+      - name: Verify destroy plan digest
+        working-directory: ${{ env.TF_ROOT }}
+        shell: bash
+        env:
+          EXPECTED_PLAN_SHA256: ${{ needs.destroy-plan.outputs.plan_sha256 }}
+        run: |
+          [[ "$EXPECTED_PLAN_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          actual_sha=$(sha256sum destroy.tfplan | cut -d ' ' -f1)
+          test "$actual_sha" = "$EXPECTED_PLAN_SHA256"
+
+      - name: Apply approved destroy plan
+        working-directory: ${{ env.TF_ROOT }}
+        run: terraform apply -input=false destroy.tfplan

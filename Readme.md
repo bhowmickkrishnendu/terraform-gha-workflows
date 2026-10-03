@@ -1,27 +1,11 @@
 # Reusable Terraform GitHub Actions workflows
 
-This repository provides reusable plan, apply, and destroy workflows under `.github/workflows/`. A caller supplies its AWS region, GitHub OIDC role ARN, environment name, and component name. The plan and apply workflows share a plan artifact named with the environment and component.
+This repository provides reusable plan, apply, and destroy workflows. Callers must pin a reviewed commit SHA. Every caller supplies the AWS Region, OIDC role ARN, component name, and Terraform root path. The optional `root_directory` input falls back to `environments/<environment>/<component>` for older callers.
 
-## Terraform root path
+The plan job checks formatting, initializes with the committed provider lock file, validates the root, and saves a binary plan. It returns `has_changes` and `plan_sha256`. A changed plan is uploaded for one day unless `upload_plan: false` is passed for a manual read-only plan. The job summary lists only resource addresses and actions. Saved plans can contain secrets, so restrict Actions access and do not download or publish them casually.
 
-The optional `root_directory` input points to the Terraform root in the caller repository. For a repository with `stacks/networking`, pass `root_directory: stacks/networking`. Plan, apply, and destroy must receive the same path for that component. The value is relative to the caller repository root.
+The apply job must receive `expected_plan_sha256` and `approval_environment`. It waits at that GitHub environment, checks that required reviewers are configured, verifies the saved plan digest, and applies the exact plan from the same workflow run. The caller must put plan and apply in dependent jobs and pass the plan outputs. Create a separate protected environment for each stack. An environment name alone is not an approval rule.
 
-If `root_directory` is omitted, the workflows continue to use `environments/<environment>/<component>`. This keeps existing callers working while they update their folder layouts.
+Destroy is a separate manual path. It requires the exact text `DESTROY`, creates a destroy plan, waits at its protected environment when changes exist, verifies the plan digest, and applies that saved destroy plan. Pass the same root, Region, and variable filename to plan, apply, and destroy. The caller should also serialize live workflows so two runs do not compete for the same state.
 
-```yaml
-jobs:
-  plan:
-    uses: OWNER/terraform-gha-workflows/.github/workflows/terraform-plan.yml@PINNED_COMMIT
-    with:
-      environment: dev
-      component: networking
-      root_directory: stacks/networking
-      aws_region: YOUR_REGION
-      terraform_version: 1.14.2
-      tfvars_file: dev.tfvars
-      role_to_assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
-    secrets:
-      INFRACOST_API_KEY: ${{ secrets.INFRACOST_API_KEY }}
-```
-
-Pin a reviewed commit in callers. The workflows use GitHub OIDC to assume the supplied AWS role. They do not need AWS access keys in repository secrets. Check the caller's plan, approval, and artifact settings before enabling apply or destroy.
+This repository does not create IAM roles, GitHub environments, or branch protection rules. The caller owns those settings and should use a separate PR validation workflow that never exposes a live state role to untrusted PR code.
