@@ -30,6 +30,10 @@ on:
         required: false
         type: boolean
         default: true
+    secrets:
+      TF_PLAN_PASSPHRASE:
+        description: High-entropy passphrase for encrypted saved-plan artifacts
+        required: false
     outputs:
       has_changes:
         description: Whether the saved plan contains changes
@@ -38,10 +42,17 @@ on:
         description: SHA256 of the saved binary plan
         value: ${{ jobs.terraform.outputs.plan_sha256 }}
 
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   terraform:
     name: Terraform Plan
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       id-token: write
       contents: read
@@ -51,19 +62,50 @@ jobs:
     env:
       TF_ROOT: ${{ inputs.root_directory != '' && inputs.root_directory || format('environments/{0}/{1}', inputs.environment, inputs.component) }}
       TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_COMPONENT: ${{ inputs.component }}
 
     steps:
+      - name: Require a trusted branch event
+        env:
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          case "$CALLER_EVENT" in
+            push|workflow_dispatch|schedule) ;;
+            *) echo "::error::Live Terraform workflows cannot run on PR events."; exit 1 ;;
+          esac
+          test -n "$DEFAULT_BRANCH"
+          [[ "$CALLER_REF" == "refs/heads/$DEFAULT_BRANCH" ]]
+
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Validate Terraform root and inputs
+        env:
+          TFVARS_FILE: ${{ inputs.tfvars_file }}
+        run: |
+          set -euo pipefail
+          [[ "$TF_COMPONENT" =~ ^[A-Za-z0-9_-]+$ ]]
+          workspace=$(realpath "$GITHUB_WORKSPACE")
+          root=$(realpath -e "$TF_ROOT")
+          [[ "$root" == "$workspace/"* ]]
+          test -f "$root/.terraform.lock.hcl"
+          vars=$(realpath -e "$root/$TFVARS_FILE")
+          [[ "$vars" == "$root/"* ]]
+          test -f "$vars"
 
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: ${{ inputs.terraform_version }}
           terraform_wrapper: false
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
@@ -85,13 +127,15 @@ jobs:
 
       - name: Save and summarize plan
         id: plan
+        env:
+          TFVARS_FILE: ${{ inputs.tfvars_file }}
         working-directory: ${{ env.TF_ROOT }}
         shell: bash
         run: |
           set -uo pipefail
           set +e
           terraform plan -no-color -detailed-exitcode -input=false \
-            -out=tfplan -var-file="${{ inputs.tfvars_file }}" \
+            -lock-timeout=5m -out=tfplan -var-file="$TFVARS_FILE" \
             2>&1 | tee "$RUNNER_TEMP/terraform-plan.txt"
           plan_exit=${PIPESTATUS[0]}
           set -e
@@ -107,7 +151,7 @@ jobs:
           fi
           echo "plan_sha256=$(sha256sum tfplan | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
           {
-            echo "### ${{ inputs.component }} plan"
+            echo "### $TF_COMPONENT plan"
             echo "Commit: ${GITHUB_SHA}"
             echo ""
             echo "Plan exit code: $plan_exit (0 = no changes, 2 = changes)"
@@ -123,19 +167,34 @@ jobs:
           set -euo pipefail
           terraform output -no-color | tee "$RUNNER_TEMP/terraform-outputs.txt"
           {
-            echo "### ${{ inputs.component }} current state outputs"
+            echo "### $TF_COMPONENT current state outputs"
             echo "These values are from state before apply. Proposed output changes appear in the plan above."
             echo '```text'
             cat "$RUNNER_TEMP/terraform-outputs.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Encrypt sensitive plan
+        if: steps.plan.outputs.has_changes == 'true' && inputs.upload_plan
+        working-directory: ${{ env.TF_ROOT }}
+        env:
+          TF_PLAN_PASSPHRASE: ${{ secrets.TF_PLAN_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ "${#TF_PLAN_PASSPHRASE}" -lt 32 ]; then
+            echo "::error::Configure TF_PLAN_PASSPHRASE with at least 32 random characters."
+            exit 1
+          fi
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -md sha256 \
+            -pass env:TF_PLAN_PASSPHRASE -in tfplan -out tfplan.enc
+
       - name: Upload sensitive plan for apply
         if: steps.plan.outputs.has_changes == 'true' && inputs.upload_plan
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: tfplan-${{ inputs.environment }}-${{ inputs.component }}
-          path: ${{ env.TF_ROOT }}/tfplan
+          name: tfplan-${{ inputs.environment }}-${{ inputs.component }}-${{ github.run_attempt }}
+          path: ${{ env.TF_ROOT }}/tfplan.enc
           if-no-files-found: error
           retention-days: 1
           compression-level: 0

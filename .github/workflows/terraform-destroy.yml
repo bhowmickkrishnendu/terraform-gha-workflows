@@ -33,10 +33,22 @@ on:
         required: true
         type: string
 
+    secrets:
+      TF_PLAN_PASSPHRASE:
+        description: High-entropy passphrase for encrypted saved-plan artifacts
+        required: true
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
 jobs:
   destroy-plan:
     name: Plan Destroy
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       id-token: write
       contents: read
@@ -46,23 +58,54 @@ jobs:
     env:
       TF_ROOT: ${{ inputs.root_directory != '' && inputs.root_directory || format('environments/{0}/{1}', inputs.environment, inputs.component) }}
       TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_COMPONENT: ${{ inputs.component }}
     steps:
+      - name: Require a trusted branch event
+        env:
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          case "$CALLER_EVENT" in
+            push|workflow_dispatch|schedule) ;;
+            *) echo "::error::Live Terraform workflows cannot run on PR events."; exit 1 ;;
+          esac
+          test -n "$DEFAULT_BRANCH"
+          [[ "$CALLER_REF" == "refs/heads/$DEFAULT_BRANCH" ]]
+
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Validate typed confirmation
         env:
           CONFIRM_DESTROY: ${{ inputs.confirm_destroy }}
         run: test "$CONFIRM_DESTROY" = "DESTROY"
 
+      - name: Validate Terraform root and inputs
+        env:
+          TFVARS_FILE: ${{ inputs.tfvars_file }}
+        run: |
+          set -euo pipefail
+          [[ "$TF_COMPONENT" =~ ^[A-Za-z0-9_-]+$ ]]
+          workspace=$(realpath "$GITHUB_WORKSPACE")
+          root=$(realpath -e "$TF_ROOT")
+          [[ "$root" == "$workspace/"* ]]
+          test -f "$root/.terraform.lock.hcl"
+          vars=$(realpath -e "$root/$TFVARS_FILE")
+          [[ "$vars" == "$root/"* ]]
+          test -f "$vars"
+
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: ${{ inputs.terraform_version }}
           terraform_wrapper: false
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
@@ -73,13 +116,15 @@ jobs:
 
       - name: Save destroy plan
         id: plan
+        env:
+          TFVARS_FILE: ${{ inputs.tfvars_file }}
         working-directory: ${{ env.TF_ROOT }}
         shell: bash
         run: |
           set -uo pipefail
           set +e
           terraform plan -destroy -no-color -detailed-exitcode -input=false \
-            -out=destroy.tfplan -var-file="${{ inputs.tfvars_file }}" \
+            -lock-timeout=5m -out=destroy.tfplan -var-file="$TFVARS_FILE" \
             2>&1 | tee "$RUNNER_TEMP/terraform-destroy-plan.txt"
           plan_exit=${PIPESTATUS[0]}
           set -e
@@ -95,19 +140,34 @@ jobs:
           fi
           echo "plan_sha256=$(sha256sum destroy.tfplan | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
           {
-            echo "### ${{ inputs.component }} destroy plan"
+            echo "### $TF_COMPONENT destroy plan"
             echo "Plan exit code: $plan_exit (0 = no changes, 2 = changes)"
             echo '```text'
             terraform show -no-color destroy.tfplan
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Encrypt sensitive plan
+        if: steps.plan.outputs.has_changes == 'true'
+        working-directory: ${{ env.TF_ROOT }}
+        env:
+          TF_PLAN_PASSPHRASE: ${{ secrets.TF_PLAN_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ "${#TF_PLAN_PASSPHRASE}" -lt 32 ]; then
+            echo "::error::Configure TF_PLAN_PASSPHRASE with at least 32 random characters."
+            exit 1
+          fi
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -md sha256 \
+            -pass env:TF_PLAN_PASSPHRASE -in destroy.tfplan -out destroy.tfplan.enc
+
       - name: Upload sensitive destroy plan
         if: steps.plan.outputs.has_changes == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: destroy-plan-${{ inputs.environment }}-${{ inputs.component }}
-          path: ${{ env.TF_ROOT }}/destroy.tfplan
+          name: destroy-plan-${{ inputs.environment }}-${{ inputs.component }}-${{ github.run_attempt }}
+          path: ${{ env.TF_ROOT }}/destroy.tfplan.enc
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
@@ -117,6 +177,7 @@ jobs:
     needs: destroy-plan
     if: needs.destroy-plan.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     environment:
       name: ${{ inputs.approval_environment }}
     permissions:
@@ -126,7 +187,22 @@ jobs:
     env:
       TF_ROOT: ${{ inputs.root_directory != '' && inputs.root_directory || format('environments/{0}/{1}', inputs.environment, inputs.component) }}
       TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_COMPONENT: ${{ inputs.component }}
     steps:
+      - name: Require a trusted branch event
+        env:
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          case "$CALLER_EVENT" in
+            push|workflow_dispatch|schedule) ;;
+            *) echo "::error::Live Terraform workflows cannot run on PR events."; exit 1 ;;
+          esac
+          test -n "$DEFAULT_BRANCH"
+          [[ "$CALLER_REF" == "refs/heads/$DEFAULT_BRANCH" ]]
+
       - name: Require configured reviewers for this stack
         shell: bash
         env:
@@ -140,23 +216,36 @@ jobs:
             | jq -e 'any(.protection_rules[]?; .type == "required_reviewers" and (.reviewers | length > 0))'
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Confirm this is the latest branch commit
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          current_sha=$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)
-          test -n "$current_sha"
+          set -euo pipefail
+          current_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$GITHUB_REF_NAME" --jq '.object.sha')
           test "$current_sha" = "$GITHUB_SHA"
 
+      - name: Validate Terraform root and inputs
+        run: |
+          set -euo pipefail
+          [[ "$TF_COMPONENT" =~ ^[A-Za-z0-9_-]+$ ]]
+          workspace=$(realpath "$GITHUB_WORKSPACE")
+          root=$(realpath -e "$TF_ROOT")
+          [[ "$root" == "$workspace/"* ]]
+          test -f "$root/.terraform.lock.hcl"
+
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: ${{ inputs.terraform_version }}
           terraform_wrapper: false
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
         with:
           role-to-assume: ${{ inputs.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
@@ -166,10 +255,21 @@ jobs:
         run: terraform init -input=false -lockfile=readonly
 
       - name: Download destroy plan from this run
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: destroy-plan-${{ inputs.environment }}-${{ inputs.component }}
+          name: destroy-plan-${{ inputs.environment }}-${{ inputs.component }}-${{ github.run_attempt }}
           path: ${{ env.TF_ROOT }}
+
+      - name: Decrypt saved plan
+        working-directory: ${{ env.TF_ROOT }}
+        env:
+          TF_PLAN_PASSPHRASE: ${{ secrets.TF_PLAN_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test "${#TF_PLAN_PASSPHRASE}" -ge 32
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -md sha256 \
+            -pass env:TF_PLAN_PASSPHRASE -in destroy.tfplan.enc -out destroy.tfplan
 
       - name: Verify destroy plan digest
         working-directory: ${{ env.TF_ROOT }}
@@ -183,4 +283,4 @@ jobs:
 
       - name: Apply approved destroy plan
         working-directory: ${{ env.TF_ROOT }}
-        run: terraform apply -no-color -input=false destroy.tfplan
+        run: terraform apply -no-color -input=false -lock-timeout=5m destroy.tfplan
